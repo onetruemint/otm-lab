@@ -36,13 +36,13 @@ Route: `musetalk.mint` -> Pi-hole -> k3s Traefik -> selector-less Service + Endp
 
 - `--use_float16` is on by default. Use short clips and small batch sizes.
 - **Ollama shares this GPU.** A resident model can starve MuseTalk. Before a run, free VRAM: `podman exec ollama ollama stop <model>` (check `nvidia-smi`).
-- If you hit CUDA OOM, lower resolution/length first; `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is already set.
+- If you hit CUDA OOM, lower resolution/length first; `expandable_segments` is not available on the pinned torch 2.0.1, so do not set it (it crashes at CUDA init).
 - Inference is not instant: expect this to run as a queued Gradio job.
 
 ## Unverified, check on first run
 
 - Whether upstream `app.py` accepts `--use_float16` (the upstream docs list the flag for inference; I could not confirm it for `app.py`). If it errors, drop the flag from `command:` and the Containerfile `CMD`.
-- Gradio host/port are forced by `GRADIO_SERVER_NAME/PORT` env vars; if `app.py` hardcodes `launch(server_name=...)`, pass its own flags instead.
+- `app.py` ignores `GRADIO_SERVER_NAME`/`PORT` (it launches with `--ip`, default 127.0.0.1, which gives Bad Gateway); the command passes `--ip 0.0.0.0`.
 - `download_weights.sh` upstream layout vs the checklist in `download-weights.sh` (based on the `./models` tree in the upstream docs). The script fails loudly if any file is missing.
 - `mim install mmcv==2.0.1` normally pulls a prebuilt cu118/torch2.0 wheel. If it compiles from source, build time rises sharply.
 - No TLS, LAN only, no auth on the Gradio UI (consistent with the rest of the lab).

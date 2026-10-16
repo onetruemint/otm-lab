@@ -50,4 +50,4 @@ RUN chmod +x /usr/local/bin/download-weights.sh
 EXPOSE 7860
 
 # --use_float16 halves VRAM; essential on an 8GB card.
-CMD ["python", "app.py", "--use_float16"]
+CMD ["python", "app.py", "--ip", "0.0.0.0", "--use_float16"]
