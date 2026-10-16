@@ -66,6 +66,7 @@ spec:
       priority: 1
       middlewares:
         - name: lan-only
+        - name: dashboard-auth
         - name: traefik-dashboard-redirect
       services:
         - name: api@internal
