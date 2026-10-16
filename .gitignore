@@ -5,4 +5,6 @@ compose/etc-pihole
 musetalk/models
 musetalk/results
 
+musev/checkpoints
+
 ollama/models
