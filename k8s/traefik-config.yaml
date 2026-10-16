@@ -1,0 +1,14 @@
+# Overrides for k3s's bundled Traefik chart, applied via k3s's helm-controller.
+# Safe to apply before Traefik is enabled (helm-controller just holds onto it
+# until the `traefik` HelmChart actually exists).
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    additionalArguments:
+      # Parity with Compose Traefik's current config (api.insecure=true) —
+      # not a new weakening, matches today's dashboard auth posture.
+      - "--api.insecure=true"

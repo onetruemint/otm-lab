@@ -1,0 +1,83 @@
+# Save the output of this file and use kubectl create -f to import
+# it into Kubernetes.
+#
+# Created with podman-5.8.7
+
+# NOTE: If you generated this yaml from an unprivileged and rootless podman container on an SELinux
+# enabled system, check the podman generate kube man page for steps to follow to ensure that your pod/container
+# has the right permissions to access the volumes added.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: homelab
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-data
+  namespace: homelab
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: homelab
+  labels:
+    app.kubernetes.io/name: open-webui
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: open-webui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-webui
+    spec:
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui@sha256:8b432fe0a65b91116afc7961365c6cca5379cc923171386a96691f3471f3cae9
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: http://ollama.mint:11434
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-webui-secret
+                  key: WEBUI_SECRET_KEY
+  containers:
+  - env:
+    - name: OLLAMA_BASE_URL
+      value: http://ollama.mint:11434
+    - name: WEBUI_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: open-webui-secret
+          key: WEBUI_SECRET_KEY
+    image: ghcr.io/open-webui/open-webui:main
+    name: open-webui
+    ports:
+    - containerPort: 8080
+      hostPort: 3000
+    securityContext: {}
+    volumeMounts:
+    - mountPath: /app/backend/data
+      name: containers-open-webui-pvc
+  volumes:
+  - name: containers-open-webui-pvc
+    persistentVolumeClaim:
+      claimName: containers-open-webui
+

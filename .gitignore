@@ -1,0 +1,8 @@
+.env
+
+compose/etc-pihole
+
+musetalk/models
+musetalk/results
+
+ollama/models

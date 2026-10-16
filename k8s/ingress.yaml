@@ -1,0 +1,203 @@
+# Routes *.mint hostnames through k3s's own Traefik (the only ingress controller
+# once Compose's Traefik is retired). Backends still on Compose/Podman are bridged
+# in via selector-less Services + manually maintained EndpointSlices pointing at
+# their host-published port on the node's LAN IP — the standard k8s pattern for
+# routing cluster-internal traffic to something outside the cluster.
+---
+# metube's Service already exists (k8s/metube.yaml, type NodePort) — just add an
+# Ingress pointing at it, don't redefine the Service here.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: metube
+  namespace: homelab
+spec:
+  rules:
+    - host: ytmp3.mint
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: metube
+                port:
+                  number: 8081
+---
+# ollama stays on Compose; bridge to its host-published port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-ext
+  namespace: homelab
+spec:
+  ports:
+    - port: 11434
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ollama-ext
+  namespace: homelab
+  labels:
+    kubernetes.io/service-name: ollama-ext
+addressType: IPv4
+ports:
+  - port: 11434
+endpoints:
+  - addresses:
+      - 192.168.50.247
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ollama
+  namespace: homelab
+spec:
+  rules:
+    - host: ollama.mint
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ollama-ext
+                port:
+                  number: 11434
+---
+# open-webui stays on Compose for now (migration tracked separately); bridge to
+# its host-published port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui-ext
+  namespace: homelab
+spec:
+  ports:
+    - port: 3000
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: open-webui-ext
+  namespace: homelab
+  labels:
+    kubernetes.io/service-name: open-webui-ext
+addressType: IPv4
+ports:
+  - port: 3000
+endpoints:
+  - addresses:
+      - 192.168.50.247
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-webui
+  namespace: homelab
+spec:
+  rules:
+    - host: ai.mint
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: open-webui-ext
+                port:
+                  number: 3000
+---
+# pihole stays on Compose; bridge to its new host-published web-UI port (8089).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pihole-ext
+  namespace: homelab
+spec:
+  ports:
+    - port: 8089
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: pihole-ext
+  namespace: homelab
+  labels:
+    kubernetes.io/service-name: pihole-ext
+addressType: IPv4
+ports:
+  - port: 8089
+endpoints:
+  - addresses:
+      - 192.168.50.247
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pihole
+  namespace: homelab
+  annotations:
+    # The pihole-redirect Middleware CRD is created separately, after Traefik's
+    # own chart (and its CRDs) exist — see k8s/traefik-config.yaml.
+    traefik.ingress.kubernetes.io/router.middlewares: homelab-pihole-redirect@kubernetescrd
+spec:
+  rules:
+    - host: pihole.mint
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pihole-ext
+                port:
+                  number: 8089
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: musetalk-ext
+  namespace: homelab
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 7860
+      targetPort: 7860
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: musetalk-ext
+  namespace: homelab
+  labels:
+    kubernetes.io/service-name: musetalk-ext
+addressType: IPv4
+ports:
+  - name: http
+    port: 7860
+    protocol: TCP
+endpoints:
+  - addresses: ["192.168.50.247"]
+    conditions: {ready: true}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: musetalk
+  namespace: homelab
+spec:
+  rules:
+    - host: musetalk.mint
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: musetalk-ext
+                port:
+                  number: 7860

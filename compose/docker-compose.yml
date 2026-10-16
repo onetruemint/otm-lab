@@ -1,0 +1,175 @@
+services:
+  postgres:
+    container_name: postgres
+    image: ${POSTGRES_IMAGE}
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      homelab:
+
+  # metube moved to k3s (homelab namespace) — see /home/mint/containers/k8s/metube.yaml.
+  # ytmp3.mint now routes to it via k3s's own Traefik (k8s/ingress.yaml).
+
+  open-webui:
+    container_name: open-webui
+    image: ${OPEN_WEBUI_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      - ollama
+      - socket-proxy
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama.mint:11434
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+    volumes:
+      - open-webui:/app/backend/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      homelab:
+
+  ollama:
+    container_name: ollama
+    image: ${OLLAMA_IMAGE}
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      homelab:
+    ports:
+      - 11434:11434
+    restart: unless-stopped
+    devices:
+      - nvidia.com/gpu=all
+
+  pihole:
+    container_name: pihole
+    image: ${PI_HOLE_IMAGE}
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "8089:80/tcp"  # web UI, for k3s Traefik to reach (no other host port existed before)
+    environment:
+      # Set the appropriate timezone for your location (https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g:
+      TZ: 'America/Denver'
+      # Set a password to access the web interface. Not setting one will result in a random password being assigned
+      FTLCONF_webserver_api_password: ${MASTER_PASS}
+      # If using Docker's default `bridge` network setting the dns listening mode should be set to 'ALL'
+      PIHOLE_UID: 1000
+      PIHOLE_GID: 1000
+      FTLCONF_dns_listeningMode: 'internal'
+      FTLCONF_dns_interface: 'eth0'
+      FTLCONF_ntp_sync_active: "false"
+    # Volumes store your data between container upgrades
+    volumes:
+      # For persisting Pi-hole's databases and common configuration file
+      - './etc-pihole:/etc/pihole:z'
+      # Uncomment the below if you have custom dnsmasq config files that you want to persist. Not needed for most starting fresh with Pi-hole v6. If you're upgrading from v5 you and have used this directory before, you should keep it enabled for the first v6 container start to allow for a complete migration. It can be removed afterwards. Needs environment variable FTLCONF_misc_etc_dnsmasq_d: 'true'
+      #- './etc-dnsmasq.d:/etc/dnsmasq.d'
+    cap_add:
+      # See https://docs.pi-hole.net/docker/#note-on-capabilities
+      # Required if you are using Pi-hole as your DHCP server, else not needed
+      - NET_ADMIN
+      # Required if you are using Pi-hole as your NTP client to be able to set the host's system time
+      - SYS_TIME
+      # Optional, if Pi-hole should get some more processing time
+      - SYS_NICE
+    networks:
+      homelab:
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+      - netns-fix
+
+  # Traefik moved to k3s (the cluster's own bundled Traefik is now the single
+  # front door on 80/443) — see /home/mint/containers/k8s/ingress.yaml and
+  # k8s/traefik-dashboard.yaml. socket-proxy is no longer needed by anything
+  # Traefik-related but is left running in case other Docker-API consumers
+  # get added later.
+
+  socket-proxy:
+    container_name: socket-proxy
+    image: ${SOCKET_PROXY_IMAGE}
+    environment:
+      - CONTAINERS=1
+      - NETWORKS=1
+      - SERVICES=1
+      - TASKS=1
+    volumes:
+      - "/run/user/1000/podman/podman.sock:/var/run/docker.sock:ro,z"
+    networks:
+      homelab:
+        ipv4_address: 10.89.1.2
+    restart: unless-stopped
+    privileged: true
+
+  # Works around k3s loading br_netfilter, which makes the rootless podman
+  # bridge's traffic subject to netfilter and breaks local delivery to the
+  # aardvark-dns gateway (10.89.1.1). Needs host PID + a privileged netns
+  # entry to flip the sysctl inside aardvark-dns's own network namespace;
+  # that namespace is rebuilt on every `compose up`, so this has to re-run
+  # every time rather than being a one-off host fix.
+  netns-fix:
+    container_name: netns-fix
+    image: nicolaka/netshoot:latest
+    pid: host
+    privileged: true
+    network_mode: none
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    # depends_on only waits for socket-proxy's own start, not for aardvark-dns,
+    # which podman only spawns once a homelab-network container actually needs
+    # it - so the retry loop below still matters, just with a longer margin.
+    depends_on:
+      - socket-proxy
+    post_start:
+      # $$ is a literal $ - compose interpolates bare $VAR in this file before
+      # the script ever reaches the container, which silently blanked $PID.
+      - command: ["sh", "-c", 'for i in $(seq 1 90); do PID=$(pgrep -f aardvark-dns | head -1); if [ -n "$$PID" ]; then break; fi; sleep 1; done; if [ -n "$$PID" ]; then nsenter -t "$$PID" -n sysctl -w net.bridge.bridge-nf-call-iptables=0; nsenter -t "$$PID" -n sysctl -w net.bridge.bridge-nf-call-ip6tables=0; else echo "aardvark-dns not found after 90s" >&2; exit 1; fi']
+
+  musetalk:
+    container_name: musetalk
+    image: ${MUSETALK_IMAGE}
+    build:
+      context: ../musetalk
+      dockerfile: Containerfile
+      args:
+        MUSETALK_REF: 0a89dec45a0192b824e3cf4daf96c239440c5ed8
+    restart: unless-stopped
+    networks: [homelab]
+    ports:
+      - "7860:7860"                   # host port k3s Traefik bridges to (musetalk.mint)
+    devices:
+      - nvidia.com/gpu=all            # CDI, /etc/cdi/nvidia.yaml
+    security_opt:
+      - label=disable                 # SELinux + CDI GPU access
+    volumes:
+      - ../musetalk/models:/app/models:z
+      - ../musetalk/results:/app/results:z
+    environment:
+      GRADIO_SERVER_NAME: 0.0.0.0
+      GRADIO_SERVER_PORT: "7860"
+      GRADIO_ANALYTICS_ENABLED: "False"
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    command: ["python", "app.py", "--use_float16"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:7860/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s              # model load on first request path is slow
+
+networks:
+  homelab:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 10.89.1.0/24
+
+volumes:
+  ollama_data:
+  open-webui:
+  metube:

@@ -1,0 +1,52 @@
+# Requires Traefik's own CRDs (Middleware, IngressRoute) to exist — apply this
+# only after k3s's Traefik is enabled and running (step 4 of the cutover), not
+# before. These give traefik.mint its dashboard and pihole.mint its redirect,
+# matching what Compose's Traefik did.
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: pihole-redirect
+  namespace: homelab
+spec:
+  redirectRegex:
+    regex: ^http://pihole.mint/?$
+    replacement: http://pihole.mint/admin
+---
+# The dashboard/api backend (api@internal) doesn't redirect bare `/` to
+# `/dashboard/` itself on this entrypoint — that auto-redirect is a feature of
+# Traefik's dedicated internal admin port, which isn't what's exposed here.
+# Reproduce it explicitly.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: traefik-dashboard-redirect
+  namespace: kube-system
+spec:
+  redirectRegex:
+    regex: ^http://traefik.mint/?$
+    replacement: http://traefik.mint/dashboard/
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: traefik-dashboard
+  namespace: kube-system
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`traefik.mint`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
+      kind: Rule
+      priority: 10
+      services:
+        - name: api@internal
+          kind: TraefikService
+    - match: Host(`traefik.mint`)
+      kind: Rule
+      priority: 1
+      middlewares:
+        - name: traefik-dashboard-redirect
+      services:
+        - name: api@internal
+          kind: TraefikService

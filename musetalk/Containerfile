@@ -1,0 +1,53 @@
+# MuseTalk 1.5 Gradio web UI for the otm-lab homelab (RTX 4060 Ti, 8GB).
+# Build context: this directory.  Weights are NOT baked in: they live in a
+# bind-mounted ./models volume and are fetched once by download-weights.sh.
+
+FROM docker.io/nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1 \
+    GRADIO_SERVER_NAME=0.0.0.0 \
+    GRADIO_SERVER_PORT=7860 \
+    GRADIO_ANALYTICS_ENABLED=False
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3.10 python3-pip python3.10-dev python-is-python3 \
+      git ffmpeg build-essential ninja-build \
+      libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+      curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin to a commit SHA for reproducibility:
+#   podman compose build --build-arg MUSETALK_REF=<sha> musetalk
+ARG MUSETALK_REF=main
+RUN git clone https://github.com/TMElyralab/MuseTalk.git /app \
+    && cd /app && git checkout "${MUSETALK_REF}"
+
+WORKDIR /app
+
+# torch 2.0.1 + cu118 (upstream's tested combo; cu118 supports Ada / sm_89)
+RUN pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
+      --index-url https://download.pytorch.org/whl/cu118
+
+RUN pip install -r requirements.txt
+
+# MMLab stack for face detection / pose (DWPose)
+RUN pip install -U openmim \
+    && mim install mmengine \
+    && mim install "mmcv==2.0.1" \
+    && mim install "mmdet==3.1.0" \
+    && mim install "mmpose==1.1.0"
+
+# huggingface-cli + gdown for the weight download script.
+# huggingface_hub MUST stay <1.0: transformers 4.39.2 (pinned by upstream
+# requirements.txt) refuses to import with 2.x, which an unpinned -U installs.
+RUN pip install "huggingface_hub[cli]<1.0" gdown
+
+COPY download-weights.sh /usr/local/bin/download-weights.sh
+RUN chmod +x /usr/local/bin/download-weights.sh
+
+EXPOSE 7860
+
+# --use_float16 halves VRAM; essential on an 8GB card.
+CMD ["python", "app.py", "--use_float16"]

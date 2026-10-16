@@ -1,0 +1,105 @@
+# metube on k3s — Deployment + Service + PVC
+# Namespace is created by this same file so `kubectl apply -f` is a one-shot apply.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: homelab
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: metube-downloads
+  namespace: homelab
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # local-path is the cluster default StorageClass; omitted here so it's used implicitly.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metube
+  namespace: homelab
+  labels:
+    app.kubernetes.io/name: metube
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+    # Recreate, not RollingUpdate: the PVC is ReadWriteOnce and local-path has no
+    # multi-attach support, so two Pod generations can't mount it at once.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metube
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metube
+    spec:
+      containers:
+        - name: metube
+          image: ghcr.io/alexta69/metube@sha256:36ebbfdcdfe6ee286e2b231d91c78759bb629cd283c6f75b75e1657fda2134f4
+          # Digest of the image currently running under Podman (tag was :latest).
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+          volumeMounts:
+            - name: downloads
+              mountPath: /downloads
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: metube-downloads
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metube
+  namespace: homelab
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: metube
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+      nodePort: 30081
