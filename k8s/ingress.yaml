@@ -11,6 +11,8 @@ kind: Ingress
 metadata:
   name: metube
   namespace: homelab
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd
 spec:
   rules:
     - host: ytmp3.mint
@@ -53,6 +55,8 @@ kind: Ingress
 metadata:
   name: ollama
   namespace: homelab
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd
 spec:
   rules:
     - host: ollama.mint
@@ -96,6 +100,8 @@ kind: Ingress
 metadata:
   name: open-webui
   namespace: homelab
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd
 spec:
   rules:
     - host: ai.mint
@@ -141,7 +147,7 @@ metadata:
   annotations:
     # The pihole-redirect Middleware CRD is created separately, after Traefik's
     # own chart (and its CRDs) exist — see k8s/traefik-config.yaml.
-    traefik.ingress.kubernetes.io/router.middlewares: homelab-pihole-redirect@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd,homelab-pihole-redirect@kubernetescrd
 spec:
   rules:
     - host: pihole.mint
@@ -189,6 +195,8 @@ kind: Ingress
 metadata:
   name: musetalk
   namespace: homelab
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd
 spec:
   rules:
     - host: musetalk.mint

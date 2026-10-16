@@ -3,6 +3,22 @@
 # before. These give traefik.mint its dashboard and pihole.mint its redirect,
 # matching what Compose's Traefik did.
 ---
+# LAN-only gate applied to every Ingress (annotation
+# traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd).
+# Pod CIDR is deliberately NOT allowed: if Traefik saw pod IPs the gate would be
+# fail-open. traefik-config.yaml sets externalTrafficPolicy: Local so Traefik sees
+# real client IPs.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: lan-only
+  namespace: homelab
+spec:
+  ipAllowList:
+    sourceRange:
+      - 192.168.50.0/24
+      - 127.0.0.1/32
+---
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -39,6 +55,9 @@ spec:
     - match: Host(`traefik.mint`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
       kind: Rule
       priority: 10
+      middlewares:
+        - name: lan-only
+        - name: dashboard-auth
       services:
         - name: api@internal
           kind: TraefikService
@@ -46,7 +65,34 @@ spec:
       kind: Rule
       priority: 1
       middlewares:
+        - name: lan-only
         - name: traefik-dashboard-redirect
       services:
         - name: api@internal
           kind: TraefikService
+---
+# Same gate for the dashboard, which lives in kube-system (middleware refs are namespaced).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: lan-only
+  namespace: kube-system
+spec:
+  ipAllowList:
+    sourceRange:
+      - 192.168.50.0/24
+      - 127.0.0.1/32
+---
+# Credentials come from Secret `traefik-dashboard-auth` (key `users`, htpasswd format),
+# created out of band and never committed:
+#   (umask 077; printf 'admin:%s\n' "$(openssl passwd -apr1)" > ~/.dash-users)
+#   sudo k3s kubectl -n kube-system create secret generic traefik-dashboard-auth \
+#     --from-file=users=$HOME/.dash-users; rm -f ~/.dash-users
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: dashboard-auth
+  namespace: kube-system
+spec:
+  basicAuth:
+    secret: traefik-dashboard-auth

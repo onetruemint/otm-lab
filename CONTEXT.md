@@ -36,8 +36,9 @@ Live hostnames (HTTP only, no TLS): `ytmp3.mint` (metube, k8s), `ai.mint` (open-
 2. **k3s `/etc/rancher/k3s/config.yaml` must NOT disable `traefik` or `servicelb`** (the disable list is deliberately empty). Re-adding them takes down every `*.mint` hostname.
 3. **firewalld:** `cni0` (k3s bridge) and `podman1` (Podman bridge) are in the `trusted` zone; `FedoraServer` zone has TCP `11434,3000,8089,7860` (pods → Compose services) and NodePorts `30080-32767`. **Any new Compose service that k3s pods/Traefik must reach needs its host-published port added to `FedoraServer`** (`sudo firewall-cmd --zone=FedoraServer --add-port=<p>/tcp --permanent && sudo firewall-cmd --reload`). Firewall loosening needs explicit user approval. Re-verify with `firewall-cmd --zone=trusted --list-interfaces` after OS updates/firewalld reloads.
 4. **Rootless Podman `pasta` cannot hairpin** to the host's own LAN IP on unmapped ports, so Podman containers cannot easily reach into k3s. Compose → k3s traffic is therefore avoided; k3s → Compose via host-published ports is the supported direction.
-5. **Test routing from a different LAN device**, not `curl 127.0.0.1` on the host — loopback bypasses firewalld and gives false passes.
-6. Compose network `homelab`: subnet `10.89.1.0/24`, `socket-proxy` pinned to `10.89.1.2`. k3s pod CIDR `10.42.0.0/16`, service CIDR `10.43.0.0/16`.
+5. **Access control:** every Ingress carries the Traefik `lan-only` ipAllowList middleware (`192.168.50.0/24` + localhost; defined in `k8s/traefik-dashboard.yaml`; add the annotation `traefik.ingress.kubernetes.io/router.middlewares: homelab-lan-only@kubernetescrd` to new Ingresses). Traefik's Service uses `externalTrafficPolicy: Local` so it sees real client IPs; do not allow the pod CIDR in it. The Traefik dashboard also needs basicAuth (Secret `traefik-dashboard-auth`, user `admin`, created out of band, not in git). **Requests made from the host itself (curl to the LAN IP) return 403** because they arrive as the bridge IP; this is expected, test from another LAN device.
+6. **Test routing from a different LAN device**, not `curl 127.0.0.1` on the host — loopback bypasses firewalld and gives false passes.
+7. Compose network `homelab`: subnet `10.89.1.0/24`, `socket-proxy` pinned to `10.89.1.2`. k3s pod CIDR `10.42.0.0/16`, service CIDR `10.43.0.0/16`.
 
 ## 4. Access & tooling on the host
 
@@ -99,7 +100,7 @@ docs/k3s-migration-handoff.md  history + remaining migration todo
    sudo k3s kubectl -n homelab logs deploy/<app> --tail=50
    ```
 4. **Add the DNS record** `<app>.mint -> 192.168.50.247` in Pi-hole (§2).
-5. **Verify from another LAN device**: `curl -sI http://<app>.mint/` (§3.5). Also confirm no stray LoadBalancer: `sudo k3s kubectl get svc -A | grep LoadBalancer` → only `traefik`.
+5. **Verify from another LAN device**: `curl -sI http://<app>.mint/` (§3.6). Also confirm no stray LoadBalancer: `sudo k3s kubectl get svc -A | grep LoadBalancer` → only `traefik`.
 6. Commit manifests (never `.env`/`etc-pihole`).
 
 ### B. New service on Podman Compose
@@ -128,4 +129,4 @@ Custom models: drop `<name>.model` Modelfiles in `ollama/models/` and run `./oll
 - Don't `curl 127.0.0.1` to claim a route works; test from another LAN host.
 - Ask the user before firewall changes, deleting volumes, or `compose down` of the whole stack (takes down DNS for the LAN).
 - `postgres` on Compose is not wired to anything and is on the `homelab` Compose network only (not reachable from k3s without a published port).
-- No TLS anywhere; all `*.mint` is plain HTTP on the LAN.
+- No TLS anywhere; all `*.mint` is plain HTTP on the LAN. Backends (ollama, Gradio) have no auth of their own; the `lan-only` middleware is the only gate.

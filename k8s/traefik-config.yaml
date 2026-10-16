@@ -8,7 +8,10 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
-    additionalArguments:
-      # Parity with Compose Traefik's current config (api.insecure=true) —
-      # not a new weakening, matches today's dashboard auth posture.
-      - "--api.insecure=true"
+    # api.insecure was dropped: the dashboard is served via the IngressRoute in
+    # traefik-dashboard.yaml behind lan-only + basicAuth instead.
+    additionalArguments: []
+    service:
+      spec:
+        # Preserve real client source IPs so the lan-only ipAllowList is meaningful.
+        externalTrafficPolicy: Local
