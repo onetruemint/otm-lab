@@ -1,0 +1,52 @@
+# MuseV Gradio UI for otm-lab. Built on upstream's own image (they state they
+# only test in docker). That image is ~2 years old and only has a `latest` tag:
+# after the first pull, pin it by digest via the MUSEV_BASE build arg.
+#   podman pull docker.io/anchorxia/musev:latest
+#   podman image inspect --format '{{.Digest}}' docker.io/anchorxia/musev:latest
+
+ARG MUSEV_BASE=docker.io/anchorxia/musev:latest
+FROM ${MUSEV_BASE}
+
+ENV GRADIO_SERVER_NAME=0.0.0.0 \
+    GRADIO_SERVER_PORT=7860 \
+    GRADIO_ANALYTICS_ENABLED=False \
+    PYTHONUNBUFFERED=1
+
+USER root
+WORKDIR /app
+
+# Pin to a commit SHA for reproducibility.
+ARG MUSEV_REF=main
+RUN git clone --recursive https://github.com/TMElyralab/MuseV.git /app/MuseV \
+    && cd /app/MuseV && git checkout "${MUSEV_REF}" \
+    && git submodule update --init --recursive
+
+# 8GB-VRAM patches. Upstream's Gradio app loads the 12GB `musev_referencenet`
+# text2video pipeline AND a second video2video pipeline at import, so it OOMs on
+# an 8GB card before serving anything. Run only text2video with the plain `musev`
+# unet (upstream: ~8GB at 512x512, time_size=12), no referencenet / ip-adapter.
+# Each sed is followed by a grep so the build fails if upstream changes the text.
+RUN cd /app/MuseV/scripts/gradio \
+    && sed -i 's/^ignore_video2video = False/ignore_video2video = True/' app.py \
+    && grep -q '^ignore_video2video = True' app.py \
+    && sed -i \
+         -e 's/"unet_model_name": "musev_referencenet"/"unet_model_name": "musev"/' \
+         -e 's/"referencenet_model_name": "musev_referencenet"/"referencenet_model_name": None/' \
+         -e 's/"ip_adapter_model_name": "musev_referencenet"/"ip_adapter_model_name": None/' \
+         -e 's/"redraw_condition_image_with_referencenet": True/"redraw_condition_image_with_referencenet": False/' \
+         -e 's/"time_size": 24/"time_size": 12/' \
+         gradio_text2video.py \
+    && grep -q '"unet_model_name": "musev"' gradio_text2video.py \
+    && grep -q '"referencenet_model_name": None' gradio_text2video.py \
+    && grep -q '"ip_adapter_model_name": None' gradio_text2video.py \
+    && grep -q '"time_size": 12' gradio_text2video.py
+
+# Checkpoints are bind-mounted here, never baked in.
+RUN mkdir -p /app/MuseV/checkpoints
+
+COPY entrypoint.sh /usr/local/bin/musev-entrypoint.sh
+COPY download-checkpoints.sh /usr/local/bin/download-checkpoints.sh
+RUN chmod +x /usr/local/bin/musev-entrypoint.sh /usr/local/bin/download-checkpoints.sh
+
+EXPOSE 7860
+ENTRYPOINT ["/usr/local/bin/musev-entrypoint.sh"]
